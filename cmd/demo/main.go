@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"asy/internal/task"
+	"github.com/czh0727/asy/internal/task"
 )
 
 func main() {
