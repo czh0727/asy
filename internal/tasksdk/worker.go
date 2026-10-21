@@ -1,4 +1,3 @@
-
 package tasksdk
 
 import (
@@ -8,24 +7,53 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/czh0727/asy/internal/task"
 )
+
+// WorkerOptions 控制每个 Worker 实例的运行参数。
+type WorkerOptions struct {
+	MaxConcurrent int
+	ShutdownGrace time.Duration
+}
 
 type Worker struct {
 	client       TaskClient
 	registry     *Registry
 	taskType     string
 	pollInterval time.Duration
+	options      WorkerOptions
 }
 
-// 一个 Worker 实例当前串行处理一种任务类型。
+// NewWorker 保留第四章的构造函数。
+// 默认串行执行，保证之前的代码和测试兼容。
 func NewWorker(
 	client TaskClient,
 	registry *Registry,
 	taskType string,
 	pollInterval time.Duration,
+) (*Worker, error) {
+	return NewWorkerWithOptions(
+		client,
+		registry,
+		taskType,
+		pollInterval,
+		WorkerOptions{
+			MaxConcurrent: 1,
+			ShutdownGrace: 10 * time.Second,
+		},
+	)
+}
+
+// NewWorkerWithOptions 创建可配置并发数的 Worker。
+func NewWorkerWithOptions(
+	client TaskClient,
+	registry *Registry,
+	taskType string,
+	pollInterval time.Duration,
+	opts WorkerOptions,
 ) (*Worker, error) {
 	if client == nil ||
 		registry == nil ||
@@ -33,6 +61,13 @@ func NewWorker(
 		pollInterval <= 0 {
 		return nil, errors.New(
 			"invalid worker configuration",
+		)
+	}
+
+	if opts.MaxConcurrent <= 0 ||
+		opts.ShutdownGrace <= 0 {
+		return nil, errors.New(
+			"max concurrent and shutdown grace must be positive",
 		)
 	}
 
@@ -48,19 +83,22 @@ func NewWorker(
 		registry:     registry,
 		taskType:     taskType,
 		pollInterval: pollInterval,
+		options:      opts,
 	}, nil
 }
 
-// RunOnce 最多领取并执行一条任务。
-// bool 表示本次是否领取到了任务。
+// RunOnce 保留第四章接口，仍然同步执行一条任务。
 func (w *Worker) RunOnce(
 	ctx context.Context,
 ) (bool, error) {
+	if ctx == nil {
+		return false, errors.New("nil context")
+	}
+
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 
-	// 第一步：从 flowsvr 领取任务
 	claimed, err := w.client.Claim(
 		ctx, w.taskType,
 	)
@@ -74,40 +112,44 @@ func (w *Worker) RunOnce(
 		return false, nil
 	}
 
-	// 第二步：查找对应业务 Handler
+	return true, w.execute(ctx, claimed)
+}
+
+// execute 负责 Handler 执行与任务结果回写。
+// Run 会保证调用 execute 前已经取得并发槽位。
+func (w *Worker) execute(
+	ctx context.Context,
+	claimed *ClaimedTask,
+) error {
 	handler, ok := w.registry.Get(
 		claimed.TaskType,
 	)
 	if !ok {
-		return true, fmt.Errorf(
-			"handler for %q missing",
+		return fmt.Errorf(
+			"handler for %q missing after claim",
 			claimed.TaskType,
 		)
 	}
 
-	// 第三步：执行业务 Handler，并捕获 panic
 	handleErr := callHandler(
 		ctx, handler, claimed.Payload,
 	)
 
-	// 如果执行中收到了退出信号，
-	// 不再将该任务确认为 success 或 failed。
+	// 如果 Handler 在取消信号后结束，
+	// 不把它错误地确认成 success / failed。
 	if err := ctx.Err(); err != nil {
-		return true, fmt.Errorf(
+		return fmt.Errorf(
 			"task %s interrupted before finish: %w",
-			claimed.ID,
-			err,
+			claimed.ID, err,
 		)
 	}
 
-	// 第四步：确定任务最终状态
-	finalStatus := task.Success
+	status := task.Success
 	if handleErr != nil {
-		finalStatus = task.Failed
+		status = task.Failed
 	}
 
-	// 第五步：回写任务执行结果。
-	// 使用独立的短超时 Context 保护收尾操作。
+	// 收尾回写使用独立、有限时长的 Context。
 	finishCtx, cancel := context.WithTimeout(
 		context.Background(),
 		5*time.Second,
@@ -117,20 +159,18 @@ func (w *Worker) RunOnce(
 	if err := w.client.Finish(
 		finishCtx,
 		claimed.ID,
-		finalStatus,
+		status,
 	); err != nil {
-		return true, fmt.Errorf(
+		return fmt.Errorf(
 			"finish task %s (result uncertain): %w",
-			claimed.ID,
-			err,
+			claimed.ID, err,
 		)
 	}
 
 	if handleErr != nil {
-		return true, fmt.Errorf(
+		return fmt.Errorf(
 			"task %s failed and marked failed: %w",
-			claimed.ID,
-			handleErr,
+			claimed.ID, handleErr,
 		)
 	}
 
@@ -140,10 +180,10 @@ func (w *Worker) RunOnce(
 		"type", claimed.TaskType,
 	)
 
-	return true, nil
+	return nil
 }
 
-// callHandler 统一执行 Handler，并恢复 panic。
+// callHandler 捕获当前 Goroutine 中的 Handler panic。
 func callHandler(
 	ctx context.Context,
 	handler Handler,
@@ -160,7 +200,8 @@ func callHandler(
 	return handler.Handle(ctx, payload)
 }
 
-// Run 是 Worker 的主调度循环。
+// Run：并发调度入口。
+// 关键原则：先获取槽位，再领取任务。
 func (w *Worker) Run(
 	ctx context.Context,
 ) error {
@@ -168,30 +209,134 @@ func (w *Worker) Run(
 		return errors.New("nil context")
 	}
 
-	ticker := time.NewTicker(w.pollInterval)
-	defer ticker.Stop()
+	// 收到停止领取信号时，不立即取消正在执行的任务。
+	// 继承 Context 中的 Value，但不继承取消和 Deadline。
+	jobCtx, cancelJobs := context.WithCancel(
+		context.WithoutCancel(ctx),
+	)
+	defer cancelJobs()
+
+	// 有界 Channel 实现 Semaphore。
+	slots := make(
+		chan struct{},
+		w.options.MaxConcurrent,
+	)
+
+	var wg sync.WaitGroup
 
 	for {
-		if ctx.Err() != nil {
-			return nil
-		}
-
-		// 串行领取并执行一条任务。
-		_, err := w.RunOnce(ctx)
-
-		if err != nil && ctx.Err() == nil {
-			slog.Error(
-				"worker iteration failed",
-				"task_type", w.taskType,
-				"err", err,
-			)
-		}
-
-		// 等待下一次轮询，或者收到退出信号。
+		// 第一步：先申请一个执行槽位。
 		select {
 		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
+			return w.drain(cancelJobs, &wg)
+
+		case slots <- struct{}{}:
+			// 成功获取槽位
 		}
+
+		// 避免停止信号和槽位同时就绪时继续 Claim。
+		if ctx.Err() != nil {
+			<-slots
+			return w.drain(cancelJobs, &wg)
+		}
+
+		// 第二步：有槽位才请求 flowsvr。
+		claimed, err := w.client.Claim(
+			ctx, w.taskType,
+		)
+
+		if err != nil || claimed == nil {
+			// 没领到任务，立即释放槽位。
+			<-slots
+
+			if err != nil && ctx.Err() == nil {
+				slog.Error(
+					"claim failed",
+					"task_type", w.taskType,
+					"err", err,
+				)
+			}
+
+			// 无任务或网络异常：等待下一轮。
+			if !waitPoll(ctx, w.pollInterval) {
+				return w.drain(cancelJobs, &wg)
+			}
+			continue
+		}
+
+		// 第三步：成功领取，启动 Goroutine。
+		wg.Add(1)
+
+		go func(t *ClaimedTask) {
+			defer wg.Done()
+
+			// 执行结束后归还槽位。
+			defer func() {
+				<-slots
+			}()
+
+			if err := w.execute(
+				jobCtx, t,
+			); err != nil {
+				slog.Error(
+					"task execution failed",
+					"task_id", t.ID,
+					"err", err,
+				)
+			}
+		}(claimed)
+
+		// 当前还有任务时立即尝试下一次领取。
+		// 如果槽位满了，会在循环顶部等待。
+	}
+}
+
+// waitPoll 支持 Context 取消的等待。
+func waitPoll(
+	ctx context.Context,
+	interval time.Duration,
+) bool {
+	t := time.NewTimer(interval)
+	defer t.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// drain：收到停止信号后，等待在途任务完成。
+func (w *Worker) drain(
+	cancelJobs context.CancelFunc,
+	wg *sync.WaitGroup,
+) error {
+	done := make(chan struct{})
+
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	timer := time.NewTimer(
+		w.options.ShutdownGrace,
+	)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		// 所有任务在宽限期内完成。
+		return nil
+
+	case <-timer.C:
+		// 宽限期耗尽，通知未完成任务取消。
+		cancelJobs()
+
+		return fmt.Errorf(
+			"shutdown grace %s exceeded; "+
+				"in-flight tasks may remain processing",
+			w.options.ShutdownGrace,
+		)
 	}
 }
