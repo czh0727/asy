@@ -18,11 +18,13 @@ import (
 )
 
 // Store 描述 HTTP 层依赖的数据库能力。
+
 type Store interface {
 	Create(context.Context, *task.Task) error
 	Get(context.Context, string) (*task.Task, error)
 	ClaimNext(context.Context, string) (*task.Task, error)
 	Finish(context.Context, string, task.Status) error
+	Retry(context.Context, string) (*task.RetryResult, error)
 }
 
 type Handler struct {
@@ -66,8 +68,10 @@ func (h *Handler) Router() *gin.Engine {
 		"/internal",
 		h.checkWorkerToken,
 	)
+
 	internal.POST("/tasks/claim", h.claimTask)
 	internal.POST("/tasks/:id/finish", h.finishTask)
+	internal.POST("/tasks/:id/retry", h.retryTask)
 
 	return r
 }

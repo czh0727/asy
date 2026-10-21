@@ -25,9 +25,23 @@ type ClaimedTask struct {
 }
 
 // Worker 依赖的网络能力。
+
 type TaskClient interface {
-	Claim(ctx context.Context, taskType string) (*ClaimedTask, error)
-	Finish(ctx context.Context, id string, status task.Status) error
+	Claim(
+		ctx context.Context,
+		taskType string,
+	) (*ClaimedTask, error)
+
+	Finish(
+		ctx context.Context,
+		id string,
+		status task.Status,
+	) error
+
+	Retry(
+		ctx context.Context,
+		id string,
+	) (*task.RetryResult, error)
 }
 
 type HTTPClient struct {

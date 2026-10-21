@@ -20,6 +20,7 @@ type fakeClient struct {
 	queue     []*ClaimedTask
 	finished  map[string]task.Status
 	finishErr error
+	retries   []string
 }
 
 func (f *fakeClient) Claim(
@@ -352,4 +353,21 @@ func TestWorkerStopsOnCancel(t *testing.T) {
 	if err := w.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func (f *fakeClient) Retry(
+	_ context.Context,
+	id string,
+) (*task.RetryResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.retries = append(f.retries, id)
+
+	return &task.RetryResult{
+		Status:     task.Pending,
+		RetryCount: len(f.retries),
+		MaxRetries: 3,
+		OrderTime:  time.Now().Add(2 * time.Second),
+	}, nil
 }

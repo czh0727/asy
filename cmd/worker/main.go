@@ -49,8 +49,14 @@ func main() {
 				}
 
 				if req.Prompt == "" {
-					return errors.New(
-						"prompt is required",
+					return errors.New("prompt is required")
+				}
+
+				// 用于本地演示：模拟第三方服务暂时不可用。
+				// 该错误被显式标记为可重试。
+				if req.Prompt == "simulate-retry" {
+					return tasksdk.Retryable(
+						errors.New("temporary upstream service unavailable"),
 					)
 				}
 

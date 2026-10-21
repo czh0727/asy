@@ -325,3 +325,38 @@ func TestBadInputsAndReady(t *testing.T) {
 		}
 	}
 }
+
+// Retry 模拟数据库重试状态迁移。
+func (f *fakeStore) Retry(
+	_ context.Context,
+	id string,
+) (*task.RetryResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	t := f.items[id]
+	if t == nil || t.Status != task.Processing {
+		return nil, mysql.ErrConflict
+	}
+
+	now := time.Now().UTC()
+
+	if t.RetryCount < t.MaxRetries {
+		delay := task.RetryDelay(t.RetryCount)
+
+		t.RetryCount++
+		t.Status = task.Pending
+		t.OrderTime = now.Add(delay)
+	} else {
+		t.Status = task.Failed
+	}
+
+	t.UpdatedAt = now
+
+	return &task.RetryResult{
+		Status:     t.Status,
+		RetryCount: t.RetryCount,
+		MaxRetries: t.MaxRetries,
+		OrderTime:  t.OrderTime,
+	}, nil
+}

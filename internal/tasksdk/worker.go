@@ -117,6 +117,7 @@ func (w *Worker) RunOnce(
 
 // execute 负责 Handler 执行与任务结果回写。
 // Run 会保证调用 execute 前已经取得并发槽位。
+
 func (w *Worker) execute(
 	ctx context.Context,
 	claimed *ClaimedTask,
@@ -135,42 +136,83 @@ func (w *Worker) execute(
 		ctx, handler, claimed.Payload,
 	)
 
-	// 如果 Handler 在取消信号后结束，
-	// 不把它错误地确认成 success / failed。
+	// 如果任务执行过程中被取消，
+	// 当前阶段不直接修改状态。
+	// 后续由超时恢复机制处理。
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf(
-			"task %s interrupted before finish: %w",
-			claimed.ID, err,
+			"task %s interrupted: %w",
+			claimed.ID,
+			err,
 		)
 	}
 
-	status := task.Success
-	if handleErr != nil {
-		status = task.Failed
-	}
-
-	// 收尾回写使用独立、有限时长的 Context。
+	// 所有结果回写都使用独立的短超时 Context。
 	finishCtx, cancel := context.WithTimeout(
 		context.Background(),
 		5*time.Second,
 	)
 	defer cancel()
 
+	// 一、临时性错误：交给 flowsvr 决定是否重试。
+	if handleErr != nil && isRetryable(handleErr) {
+		result, err := w.client.Retry(
+			finishCtx,
+			claimed.ID,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"retry task %s (result uncertain): %w",
+				claimed.ID,
+				err,
+			)
+		}
+
+		if result.Status == task.Pending {
+			slog.Warn(
+				"task scheduled for retry",
+				"id", claimed.ID,
+				"retry_count", result.RetryCount,
+				"max_retries", result.MaxRetries,
+				"next_run_at", result.OrderTime,
+				"reason", handleErr,
+			)
+			return nil
+		}
+
+		slog.Error(
+			"task exhausted retries",
+			"id", claimed.ID,
+			"retry_count", result.RetryCount,
+			"reason", handleErr,
+		)
+
+		return nil
+	}
+
+	// 二、正常成功，或者不可重试的业务错误。
+	finalStatus := task.Success
+	if handleErr != nil {
+		finalStatus = task.Failed
+	}
+
 	if err := w.client.Finish(
 		finishCtx,
 		claimed.ID,
-		status,
+		finalStatus,
 	); err != nil {
 		return fmt.Errorf(
 			"finish task %s (result uncertain): %w",
-			claimed.ID, err,
+			claimed.ID,
+			err,
 		)
 	}
 
 	if handleErr != nil {
 		return fmt.Errorf(
-			"task %s failed and marked failed: %w",
-			claimed.ID, handleErr,
+			"task %s permanently failed: %w",
+			claimed.ID,
+			handleErr,
 		)
 	}
 
