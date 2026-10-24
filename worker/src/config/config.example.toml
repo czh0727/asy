@@ -1,4 +1,4 @@
 
 flowsvr_addr = "http://127.0.0.1:41555"
-redis_lock_addr = "127.0.0.1:6379"
-redis_lock_password = "change-me"
+redis_lock_addr = "127.0.0.1:6380"
+redis_lock_password = "asy-local-only"

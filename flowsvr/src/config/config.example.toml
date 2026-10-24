@@ -4,17 +4,17 @@ port = 41555
 open_tls = false
 
 [MySQL]
-url = "127.0.0.1:3306"
+url = "127.0.0.1:3307"
 user = "root"
-pwd = "change-me"
+pwd = "asy-local-only"
 db_name = "asyncflow"
 max_idle = 20
 max_active = 100
 idle_timeout = 500
 
 [Redis]
-url = "127.0.0.1:6379"
-auth = "change-me"
+url = "127.0.0.1:6380"
+auth = "asy-local-only"
 max_idle = 20
 max_active = 100
 idle_timeout = 300

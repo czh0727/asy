@@ -1,0 +1,47 @@
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: asy-local-only
+      MYSQL_DATABASE: asyncflow
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - asyn_mysql_data:/var/lib/mysql
+      - ./sql/create.sql:/docker-entrypoint-initdb.d/01-create.sql:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -uroot -pasy-local-only --silent
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - asy-local-only
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - asyn_redis_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - -a
+        - asy-local-only
+        - ping
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  asyn_mysql_data:
+  asyn_redis_data:

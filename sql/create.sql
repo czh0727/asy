@@ -1,0 +1,94 @@
+
+CREATE DATABASE IF NOT EXISTS `asyncflow`
+    DEFAULT CHARACTER SET utf8mb4
+    COLLATE utf8mb4_unicode_ci;
+
+USE `asyncflow`;
+
+-- lark 类型的第一张任务表
+CREATE TABLE IF NOT EXISTS `t_lark_task_1` (
+    `id` int(11) NOT NULL AUTO_INCREMENT,
+    `user_id` varchar(256) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+    `task_id` varchar(256) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+    `task_type` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+    `task_stage` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+    `status` tinyint(3) unsigned NOT NULL DEFAULT '1',
+    `priority` int(11) NOT NULL DEFAULT '0' COMMENT '优先级',
+    `crt_retry_num` int(11) NOT NULL DEFAULT '0' COMMENT '已经重试几次',
+    `max_retry_num` int(11) NOT NULL DEFAULT '0' COMMENT '最大重试次数',
+    `max_retry_interval` int(11) NOT NULL DEFAULT '0' COMMENT '最大重试间隔',
+    `schedule_log` varchar(4096) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' COMMENT '调度信息记录',
+    `task_context` varchar(8192) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' COMMENT '用户自定义任务上下文',
+    `order_time` int(20) NOT NULL DEFAULT '0' COMMENT '调度排序时间',
+    `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `modify_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `idx_task_id` (`task_id`),
+    KEY `idx_user_id` (`user_id`),
+    KEY `idx_tasktype_status_modify_time` (`status`, `order_time`),
+    KEY `idx_task_type_status_modify_time` (`task_type`, `status`, `modify_time`)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci;
+
+-- 每种任务的调度配置
+CREATE TABLE IF NOT EXISTS `t_schedule_cfg` (
+    `task_type` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '任务类型',
+    `schedule_limit` int(11) DEFAULT '0' COMMENT '每次领取数量',
+    `schedule_interval` int(11) NOT NULL DEFAULT '10',
+    `max_processing_time` int(11) DEFAULT '0',
+    `max_retry_num` int(11) DEFAULT '0',
+    `retry_interval` int(11) DEFAULT NULL,
+    `max_retry_interval` int(11) DEFAULT NULL,
+    `create_time` datetime DEFAULT CURRENT_TIMESTAMP,
+    `modify_time` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (`task_type`)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci;
+
+-- 每种任务的分表读写位置
+CREATE TABLE IF NOT EXISTS `t_schedule_pos` (
+    `id` bigint(20) NOT NULL AUTO_INCREMENT,
+    `task_type` varchar(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+    `schedule_begin_pos` int(11) NOT NULL DEFAULT '0' COMMENT '调度读取位置',
+    `schedule_end_pos` int(11) NOT NULL DEFAULT '0' COMMENT '任务写入位置',
+    `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `modify_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `idx_task_type` (`task_type`)
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_unicode_ci;
+
+-- 原项目默认注册 lark 任务类型
+INSERT IGNORE INTO `t_schedule_cfg` (
+    task_type,
+    schedule_limit,
+    schedule_interval,
+    max_processing_time,
+    max_retry_num,
+    retry_interval,
+    max_retry_interval
+) VALUES (
+    'lark',
+    100,
+    10,
+    30,
+    3,
+    5,
+    30
+);
+
+INSERT IGNORE INTO `t_schedule_pos` (
+    task_type,
+    schedule_begin_pos,
+    schedule_end_pos
+) VALUES (
+    'lark',
+    1,
+    1
+);
