@@ -1,65 +1,57 @@
 
-# 第一章：任务模型与状态机
+# 第一章：项目骨架与配置系统
 
-## 1. 背景问题
+## 1. 学习目标
 
-同步 HTTP 处理不适合直接承载长耗时任务。
+从零重建 Asyncflow 项目骨架。
 
-主要问题：
-- 请求可能超时
-- 服务退出可能丢失任务
-- 难以查询任务状态
-- 失败后不方便重试
+以原项目 czh0727/asyn 为实现依据，
+保留 flowsvr、worker、taskutils、
+internal/configloader 等模块划分。
 
-## 2. 当前方案
+## 2. 配置加载过程
 
-将业务任务抽象为独立的 Task 模型。
+每个组件拥有自己的 main.go。
 
-定义四个状态：
+程序加载 config 包时，通过 init()
+向上查找 main.go，定位组件根目录。
 
-- pending：待执行
-- processing：执行中
-- success：执行成功
-- failed：最终失败
+随后调用 config.Init()，
+读取根目录下的 config/config.toml。
 
-允许的状态迁移：
+使用 BurntSushi/toml 将配置映射为 Go 结构体，
+然后执行 Validate()。
 
-pending -> processing
+## 3. 为什么分为两个配置模块？
 
-processing -> pending
+flowsvr 负责数据库、Redis、HTTP 和任务治理。
 
-processing -> success
+worker 负责执行任务，需要知道
+flowsvr 地址与 Redis 锁配置。
 
-processing -> failed
+两者配置项不同，但可以共用配置加载器。
 
-## 3. 设计取舍
+## 4. 当前状态
 
-使用独立 task 包定义领域规则。
+已实现配置加载及测试。
 
-原因：
-- 不依赖 HTTP
-- 不依赖数据库实现
-- 方便单元测试
-- 便于后续替换存储层
+暂未连接 MySQL、Redis。
+暂未启动 HTTP 服务器。
+暂未实现 TaskSDK。
 
-使用 crypto/rand 生成随机任务 ID。
+## 5. 与原项目的差异
 
-使用 OrderTime 表示最早执行时间。
+Go Module 改成 github.com/czh0727/asy。
 
-Priority 暂不参与排序。
+Go 版本使用较新基线。
 
-## 4. 当前遗留问题
+可提交的示例配置使用 config.example.toml，
+本地实际配置 config.toml 不提交。
 
-状态机不能保证数据库并发安全。
+程序入口暂时只执行配置验证，
+后续逐章补齐原项目初始化流程。
 
-内存任务无法跨服务重启恢复。
+## 6. 下一章
 
-暂未支持多 Worker 抢占。
-
-暂未支持失败重试和超时恢复。
-
-## 5. 下一阶段
-
-引入 MySQL，持久化 Task。
-
-通过数据库事务、条件更新实现任务状态原子迁移。
+实现原项目 MySQL、Redis 初始化，
+并建立原始任务配置与调度位置相关数据表。

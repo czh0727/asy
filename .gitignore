@@ -1,0 +1,8 @@
+
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+flowsvr/src/config/config.toml
+worker/src/config/config.toml

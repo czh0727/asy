@@ -1,0 +1,28 @@
+
+[COMMON]
+port = 41555
+open_tls = false
+
+[MySQL]
+url = "127.0.0.1:3306"
+user = "root"
+pwd = "change-me"
+db_name = "asyncflow"
+max_idle = 20
+max_active = 100
+idle_timeout = 500
+
+[Redis]
+url = "127.0.0.1:6379"
+auth = "change-me"
+max_idle = 20
+max_active = 100
+idle_timeout = 300
+cache_timeout_day = 3
+
+[Task]
+table_max_rows = 5000000
+split_interval = 30
+long_process_interval = 10
+move_interval = 10
+max_process_time = 10
