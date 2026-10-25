@@ -21,6 +21,9 @@ func RegisterRouter(router *gin.Engine) {
 		taskctrl.GetTaskScheduleCfgList,
 	)
 
+	v1.POST("/set_task", taskctrl.SetTask)
+	v1.GET("/get_task", taskctrl.GetTask)
+
 	v1.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "pong",

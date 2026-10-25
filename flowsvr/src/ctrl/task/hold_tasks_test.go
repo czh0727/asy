@@ -1,4 +1,3 @@
-
 package task
 
 import (
@@ -79,8 +78,8 @@ func TestHoldTasksIntegration(t *testing.T) {
 	if err := db.TaskTypeCfgNsp.Create(
 		db.DB,
 		&db.TaskScheduleCfg{
-			TaskType:        taskType,
-			ScheduleLimit:   2,
+			TaskType:         taskType,
+			ScheduleLimit:    2,
 			ScheduleInterval: 10,
 		},
 	); err != nil {

@@ -1,4 +1,3 @@
-
 package db
 
 import (
@@ -98,7 +97,7 @@ func (p *Task) BatchSetStatus(
 	}
 
 	fields := map[string]interface{}{
-		"status":      status,
+		"status": status,
 		"modify_time": time.Now().Format(
 			"2006-01-02 15:04:05",
 		),

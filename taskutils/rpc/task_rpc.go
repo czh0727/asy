@@ -1,15 +1,14 @@
-
 package rpc
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/czh0727/asy/taskutils/rpc/model"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
-
-	"github.com/czh0727/asy/taskutils/rpc/model"
 )
 
 type TaskRpc struct {
@@ -128,6 +127,109 @@ func (p *TaskRpc) HoldTasks(
 		return result, fmt.Errorf(
 			"flowsvr hold code=%d: %s",
 			result.Code, result.Msg,
+		)
+	}
+
+	return result, nil
+}
+
+// SetTask 将业务任务的状态、阶段、上下文等
+// 持久化到 flowsvr。
+func (p *TaskRpc) SetTask(
+	request *model.SetTaskReq,
+) (*model.SetTaskResp, error) {
+	if request == nil {
+		return nil, fmt.Errorf("nil set task request")
+	}
+
+	result := new(model.SetTaskResp)
+
+	err := p.requestJSON(
+		http.MethodPost,
+		model.SET_TASK_SUFFIX,
+		request,
+		result,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		return result, fmt.Errorf(
+			"flowsvr set task code=%d: %s",
+			result.Code,
+			result.Msg,
+		)
+	}
+
+	return result, nil
+}
+
+// CreateTask 通过 flowsvr 创建任务。
+func (p *TaskRpc) CreateTask(
+	request *model.CreateTaskReq,
+) (*model.CreateTaskResp, error) {
+	if request == nil {
+		return nil, fmt.Errorf("nil create task request")
+	}
+
+	result := new(model.CreateTaskResp)
+
+	err := p.requestJSON(
+		http.MethodPost,
+		model.CREATE_TASK_SUFFIX,
+		request,
+		result,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		return result, fmt.Errorf(
+			"flowsvr create task code=%d: %s",
+			result.Code,
+			result.Msg,
+		)
+	}
+
+	return result, nil
+}
+
+// GetTask 按 TaskId 查询任务。
+func (p *TaskRpc) GetTask(
+	request *model.GetTaskReq,
+) (*model.GetTaskResp, error) {
+	if request == nil || request.TaskId == "" {
+		return nil, fmt.Errorf("task id is required")
+	}
+
+	result := new(model.GetTaskResp)
+
+	path := model.GET_TASK_SUFFIX +
+		"?task_id=" + url.QueryEscape(request.TaskId)
+
+	err := p.requestJSON(
+		http.MethodGet,
+		path,
+		nil,
+		result,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		return result, fmt.Errorf(
+			"flowsvr get task code=%d: %s",
+			result.Code,
+			result.Msg,
+		)
+	}
+
+	if result.TaskData == nil {
+		return result, fmt.Errorf(
+			"flowsvr returned empty task data",
 		)
 	}
 
