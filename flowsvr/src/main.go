@@ -2,32 +2,45 @@ package main
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/czh0727/asy/flowsvr/src/cache"
 	"github.com/czh0727/asy/flowsvr/src/config"
 	"github.com/czh0727/asy/flowsvr/src/db"
 	"github.com/czh0727/asy/flowsvr/src/initialize"
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	// 第一章：初始化配置。
+	// 1. 加载配置
 	config.Init()
 
-	// 第二章：初始化 MySQL、Redis。
+	// 2. 初始化 MySQL 和 Redis
 	initialize.InitResource()
 
-	// 本章的程序只是资源初始化验证入口。
 	defer func() {
+		_ = cache.Close()
+
 		if db.DB != nil {
 			_ = db.DB.Close()
 		}
-		_ = cache.Close()
 	}()
 
-	fmt.Println("flowsvr MySQL and Redis initialized successfully")
+	// 3. 初始化 HTTP Router
+	router := gin.Default()
 
-	// 后续章节：
-	// rtm.TaskRuntime.Run()
-	// initialize.RegisterRouter(router)
-	// 启动 HTTP Server
+	// 4. 注册原项目接口
+	initialize.RegisterRouter(router)
+
+	// 5. 启动服务
+	addr := fmt.Sprintf(
+		"127.0.0.1:%d",
+		config.Conf.Common.Port,
+	)
+
+	log.Printf("flowsvr listening on %s", addr)
+
+	if err := router.Run(addr); err != nil {
+		log.Fatal(err)
+	}
 }
