@@ -50,38 +50,40 @@ func (p *LarkTask) ContextLoad() error {
 }
 
 // HandleProcess 模拟原项目的飞书业务流程。
+
 func (p *LarkTask) HandleProcess() error {
-	switch p.TaskStage {
-	case "sendmsg":
-		// 执行 sendmsg 后，更新业务阶段和上下文。
-		p.TaskStage = "record"
-		p.SetContextLocal(p.ContextData)
+    switch p.TaskStage {
 
-		// 原项目使用 fallthrough。
-		// 因此同一轮会继续执行 record 分支。
-		fallthrough
+    case "sendmsg":
+        fmt.Println("第一阶段：发送飞书消息")
 
-	case "record":
-		p.TaskStage = "record"
+        // 模拟发送消息成功
+        p.TaskStage = "record"
 
-		p.Base().Status = int(
-			constant.TASK_STATUS_SUCC,
-		)
+        // 保存业务上下文
+        p.SetContextLocal(p.ContextData)
 
-		fmt.Printf(
-			"处理 task 完成: %s, msg=%s\n",
-			p.TaskId,
-			p.ContextData.ReqBody.Msg,
-		)
+        // 注意：不设置 success
+        // run() 会自动将 processing 改成 pending
+        return nil
 
-	default:
-		p.Base().Status = int(
-			constant.TASK_STATUS_FAILED,
-		)
-	}
+    case "record":
+        fmt.Println("第二阶段：记录消息发送结果")
 
-	return nil
+        // 整个任务完成
+        p.Status = int(constant.TASK_STATUS_SUCC)
+
+        return nil
+
+    default:
+        p.Status = int(constant.TASK_STATUS_FAILED)
+        return fmt.Errorf(
+            "unknown task stage: %s",
+            p.TaskStage,
+        )
+    }
 }
+
 
 // HandleFinish 任务完成后的收尾函数。
 func (p *LarkTask) HandleFinish() {
