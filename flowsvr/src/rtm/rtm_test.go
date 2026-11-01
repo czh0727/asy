@@ -1,4 +1,3 @@
-
 package rtm
 
 import (

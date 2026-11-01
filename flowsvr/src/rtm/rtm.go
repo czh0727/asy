@@ -1,12 +1,14 @@
-
 package rtm
 
 import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
+	"sync"
 	"time"
 
+	"github.com/czh0727/asy/flowsvr/src/cache"
 	"github.com/czh0727/asy/flowsvr/src/config"
 	"github.com/czh0727/asy/flowsvr/src/db"
 )
@@ -28,44 +30,280 @@ func (p *TaskRuntime) Run() {
 	go p.RunContext(context.Background())
 }
 
-// RunContext 可通过 context 控制治理协程生命周期。
-func (p *TaskRuntime) RunContext(ctx context.Context) {
-	if ctx == nil {
-		log.Println("task runtime context is nil")
+// subTableProcessing 自动检查是否需要分表。
+func (p *TaskRuntime) subTableProcessing() {
+	if db.DB == nil {
 		return
 	}
 
-	if config.Conf == nil {
-		log.Println("task runtime config is nil")
+	maxRows := config.Conf.Task.TableMaxRows
+	if maxRows <= 0 {
 		return
 	}
 
-	interval := config.Conf.Task.LongProcessInterval
+	// 1. 获取所有任务类型的分表位置。
+	taskPosList, err :=
+		db.TaskPosNsp.GetTaskPosList(db.DB)
 
-	if interval <= 0 {
-		interval = DEFAULT_LONG_PROCESS_INTERVAL
+	if err != nil {
+		log.Printf("get task positions failed: %v", err)
+		return
 	}
 
-	ticker := time.NewTicker(
-		time.Duration(interval) * time.Second,
-	)
-	defer ticker.Stop()
+	// 2. 遍历每种任务类型。
+	for _, taskPos := range taskPosList {
+		if taskPos == nil {
+			continue
+		}
 
-	log.Printf(
-		"task runtime started, interval=%ds",
-		interval,
-	)
+		taskType := taskPos.TaskType
 
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("task runtime stopped")
-			return
+		endPos := strconv.Itoa(
+			taskPos.ScheduleEndPos,
+		)
 
-		case <-ticker.C:
-			p.dealTimeoutProcessing()
+		// 3. 统计当前写入表的数据量。
+		count, err := db.TaskNsp.GetAllTaskCount(
+			db.DB,
+			taskType,
+			endPos,
+		)
+
+		if err != nil {
+			log.Printf(
+				"get task count failed: %v",
+				err,
+			)
+			continue
+		}
+
+		// 4. 未达到阈值，不分表。
+		if count < maxRows {
+			continue
+		}
+
+		// 5. 创建下一张任务表。
+		nextPos := strconv.Itoa(
+			taskPos.ScheduleEndPos + 1,
+		)
+
+		err = db.TaskNsp.CreateTable(
+			db.DB,
+			taskType,
+			nextPos,
+		)
+
+		if err != nil {
+			log.Printf(
+				"create next task table failed: %v",
+				err,
+			)
+			continue
+		}
+
+		// 6. CAS 推进写入位置。
+		advanced, err :=
+			db.TaskPosNsp.AdvanceScheduleEndPos(
+				db.DB,
+				taskType,
+				taskPos.ScheduleEndPos,
+			)
+
+		if err != nil {
+			log.Printf(
+				"advance end pos failed: %v",
+				err,
+			)
+			continue
+		}
+
+		if !advanced {
+			continue
+		}
+
+		// 7. 更新 Redis 写入位置缓存。
+		if err := cache.SetTaskWritePos(
+			taskType,
+			taskPos.ScheduleEndPos+1,
+		); err != nil {
+			log.Printf(
+				"update task write pos cache failed: %v",
+				err,
+			)
+		}
+
+		log.Printf(
+			"task table split success: type=%s old=%d new=%d",
+			taskType,
+			taskPos.ScheduleEndPos,
+			taskPos.ScheduleEndPos+1,
+		)
+	}
+}
+
+// UpdateSchedulePosProcessing
+// 当旧表所有任务进入终态后，推进调度读取位置。
+func (p *TaskRuntime) UpdateSchedulePosProcessing() {
+	if db.DB == nil {
+		return
+	}
+
+	// 1. 获取所有任务类型的位置。
+	taskPosList, err :=
+		db.TaskPosNsp.GetTaskPosList(db.DB)
+
+	if err != nil {
+		log.Printf("get task position list failed: %v", err)
+		return
+	}
+
+	for _, taskPos := range taskPosList {
+		if taskPos == nil {
+			continue
+		}
+
+		// 2. 没有旧表需要处理。
+		if taskPos.ScheduleBeginPos >=
+			taskPos.ScheduleEndPos {
+			continue
+		}
+
+		taskType := taskPos.TaskType
+
+		beginPos := strconv.Itoa(
+			taskPos.ScheduleBeginPos,
+		)
+
+		// 3. 获取当前调度表的终态任务数量。
+		finishNum, err :=
+			db.TaskNsp.GetFinishTaskCount(
+				db.DB,
+				taskType,
+				beginPos,
+			)
+
+		if err != nil {
+			log.Printf(
+				"get finish task count failed: %v",
+				err,
+			)
+			continue
+		}
+
+		// 4. 获取当前调度表的任务总量。
+		count, err :=
+			db.TaskNsp.GetAllTaskCount(
+				db.DB,
+				taskType,
+				beginPos,
+			)
+
+		if err != nil {
+			log.Printf(
+				"get all task count failed: %v",
+				err,
+			)
+			continue
+		}
+
+		// 5. 还有任务没有完成，不能推进。
+		if finishNum != count {
+			continue
+		}
+
+		// 6. 推进 begin_pos。
+		advanced, err :=
+			db.TaskPosNsp.AdvanceScheduleBeginPos(
+				db.DB,
+				taskType,
+				taskPos.ScheduleBeginPos,
+			)
+
+		if err != nil {
+			log.Printf(
+				"advance begin pos failed: %v",
+				err,
+			)
+			continue
+		}
+
+		if advanced {
+			log.Printf(
+				"schedule begin pos advanced: type=%s pos=%d",
+				taskType,
+				taskPos.ScheduleBeginPos+1,
+			)
 		}
 	}
+}
+func (p *TaskRuntime) RunContext(ctx context.Context) {
+	if ctx == nil || config.Conf == nil {
+		return
+	}
+
+	type periodicJob struct {
+		name     string
+		interval int
+		run      func()
+	}
+
+	jobs := []periodicJob{
+		{
+			name:     "timeout recovery",
+			interval: config.Conf.Task.LongProcessInterval,
+			run:      p.dealTimeoutProcessing,
+		},
+		{
+			name:     "sub table",
+			interval: config.Conf.Task.SplitInterval,
+			run:      p.subTableProcessing,
+		},
+		{
+			name:     "schedule position",
+			interval: config.Conf.Task.MoveInterval,
+			run:      p.UpdateSchedulePosProcessing,
+		},
+	}
+
+	var wg sync.WaitGroup
+
+	for _, job := range jobs {
+		if job.interval <= 0 {
+			log.Printf(
+				"skip runtime job %s: invalid interval",
+				job.name,
+			)
+			continue
+		}
+
+		wg.Add(1)
+
+		go func(job periodicJob) {
+			defer wg.Done()
+
+			ticker := time.NewTicker(
+				time.Duration(job.interval) * time.Second,
+			)
+			defer ticker.Stop()
+
+			log.Printf(
+				"runtime job started: %s",
+				job.name,
+			)
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+
+				case <-ticker.C:
+					job.run()
+				}
+			}
+		}(job)
+	}
+
+	wg.Wait()
 }
 
 // dealTimeoutProcessing 遍历所有任务类型，处理超时任务。

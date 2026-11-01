@@ -8,8 +8,8 @@ import (
 	"github.com/czh0727/asy/flowsvr/src/config"
 	"github.com/czh0727/asy/flowsvr/src/db"
 	"github.com/czh0727/asy/flowsvr/src/initialize"
-	"github.com/gin-gonic/gin"
 	"github.com/czh0727/asy/flowsvr/src/rtm"
+	"github.com/gin-gonic/gin"
 )
 
 func main() {

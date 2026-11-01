@@ -71,37 +71,26 @@ func (p *CreateTaskHandler) HandleInput() error {
 func (p *CreateTaskHandler) HandleProcess() error {
 	input := &p.Req.TaskData
 
-	// 1. 获取当前任务类型的分表位置。
-	taskPos, err := db.TaskPosNsp.GetTaskPos(
-		db.DB, input.TaskType,
+	// 1. 获取任务创建元数据。
+	meta, err := cache.GetTaskCreateMeta(
+		db.DB,
+		input.TaskType,
 	)
 	if err != nil {
 		p.Resp.Code = constant.ERR_GET_TASK_POS
 		return err
 	}
 
-	// 2. 读取任务类型的调度配置。
-	taskCfg, err := db.TaskTypeCfgNsp.GetTaskTypeCfg(
-		db.DB, input.TaskType,
-	)
-	if err != nil {
-		p.Resp.Code =
-			constant.ERR_GET_TASK_SET_POS_FROM_DB
-		return err
+	// 2. 获取当前写入分表位置。
+	if meta.EndPos <= 0 {
+		return fmt.Errorf("invalid task write position")
 	}
 
-	if taskPos.ScheduleEndPos <= 0 {
-		p.Resp.Code = constant.ERR_GET_TASK_POS
-		return fmt.Errorf("invalid schedule end position")
-	}
+	scheduleEndPos := fmt.Sprintf("%d", meta.EndPos)
 
-	scheduleEndPos := fmt.Sprintf(
-		"%d", taskPos.ScheduleEndPos,
-	)
-
-	// 3. 继承调度配置中的重试参数。
-	input.MaxRetryNum = taskCfg.MaxRetryNum
-	input.MaxRetryInterval = taskCfg.RetryInterval
+	// 3. 继承任务类型的重试配置。
+	input.MaxRetryNum = meta.MaxRetryNum
+	input.MaxRetryInterval = meta.RetryInterval
 
 	// 4. 计算任务排序时间。
 	input.OrderTime = calcInitialOrderTime(
