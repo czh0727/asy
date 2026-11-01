@@ -9,6 +9,7 @@ import (
 	"github.com/czh0727/asy/flowsvr/src/db"
 	"github.com/czh0727/asy/flowsvr/src/initialize"
 	"github.com/gin-gonic/gin"
+	"github.com/czh0727/asy/flowsvr/src/rtm"
 )
 
 func main() {
@@ -25,7 +26,8 @@ func main() {
 			_ = db.DB.Close()
 		}
 	}()
-
+	var taskRuntime rtm.TaskRuntime
+	taskRuntime.Run()
 	// 3. 初始化 HTTP Router
 	router := gin.Default()
 
